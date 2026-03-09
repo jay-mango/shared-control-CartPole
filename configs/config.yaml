@@ -1,0 +1,4 @@
+env_id: "CartPole-v1"
+render_mode: "human"
+agent:
+  type: "BasicAgent"
