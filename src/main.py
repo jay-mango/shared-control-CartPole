@@ -1,9 +1,14 @@
 import gymnasium as gym
 import pygame
 import math
+import types
+import numpy as np
+
 from human.input_handler import InputHandler
 from envs.shared_wrapper import SharedControlWrapper
 from agents.basic_agent import BasicAgent
+from agents.advanced_agent import AdvancedAgent
+from game.target_manager import TargetManager
 
 FPS = 60  # Target frame rate
 
@@ -53,75 +58,117 @@ def patch_env_to_continuous(env):
             
         return np.array(self.state, dtype=np.float32), 1.0, terminated, False, {}
 
-    import types
-    import numpy as np
     # Bind the new method to the unwrapped environment instance
     unwrapped.step = types.MethodType(continuous_step, unwrapped)
     return env
 
 def main():
-    # Initialize pygame before creating any pygame components
+    # Initialize Pygame first to avoid console input issues on some systems.
     pygame.init()
-    
-    # 1. Setup Environment
-    env = gym.make("CartPole-v1", render_mode="human")
-
-    # Increase limits for easier manual testing
-    env.unwrapped.x_threshold = 5.0  # Wider track (Default 2.4)
-    env.unwrapped.theta_threshold_radians = math.radians(45)  # 45 degrees (Default 12)
-    
-    # Patch environment to be continuous
-    patch_env_to_continuous(env)
-    
-    # 2. Setup Input Handler
-    input_handler = InputHandler()
-    
-    # 3. Wrap environment for shared control
-    env = SharedControlWrapper(env, input_handler)
-
-    # 4. Setup Agent (The "Self Balancer")
-    agent = BasicAgent()
-
-    # 5. Setup frame rate control
-    clock = pygame.time.Clock()
-    observation, info = env.reset()
-    
-    running = True
-    while running:
-        # Handle all input for this frame
-        if not input_handler.process_frame():
-            running = False
-            break
-
-        # Agent always calculates action for stabilization
-        agent_action = agent.get_action(observation)
-
-        # --- Dynamic Alpha Calculation ---
-        # Calculate alpha here so we can eventually replace it with an RL model
-        human_force = input_handler.get_action()
-        alpha = 0.0
+    env = None
+    try:
+        # --- Interactive Agent Selection ---
+        print("\n" + "="*30)
+        print(" Choose Your Balancing Agent")
+        print("="*30)
+        print("1. Basic Agent (Mathematical PD Controller)")
+        print("2. Advanced Agent (PyTorch RL Model)")
+        print("="*30)
         
-        if abs(human_force) > 0:
-            pole_angle = observation[2]
-            safe_threshold = 0.20  # ~12 degrees
-            risk = min(abs(pole_angle) / safe_threshold, 1.0)
-            alpha = 0.6 * (1.0 - risk)
+        choice = ""
+        try:
+            while choice not in ["1", "2"]:
+                choice = input("Enter 1 or 2: ").strip()
+        except KeyboardInterrupt:
+            print("\n\nSelection cancelled. Exiting.")
+            return
 
-        # Pass both [force, alpha] to the environment
-        observation, reward, terminated, truncated, info = env.step([agent_action, alpha])
+        # Initialize the chosen agent
+        if choice == "1":
+            print("\n--> Initializing Basic PD Agent...")
+            agent = BasicAgent()
+        elif choice == "2":
+            try:
+                model_path = input("\nEnter model filename (Press Enter for 'model.zip'): ").strip()
+                if not model_path:
+                    model_path = "model.zip"
+                
+                print(f"\n--> Initializing Advanced PyTorch Agent from: {model_path}...")
+                agent = AdvancedAgent(model_path=model_path)
+            except KeyboardInterrupt:
+                print("\n\nInput cancelled. Exiting.")
+                return
 
-        # Reset if episode is done
-        if terminated or truncated:
-            observation, info = env.reset()
-        # Disable reset so you can keep moving even if the pole falls or hits the edge
-        # if terminated or truncated:
-        #     observation, info = env.reset()
+        # --- Environment and Game Setup ---
+        env = gym.make("CartPole-v1", render_mode="human")
+        #env.unwrapped.x_threshold = 5.0
+        #env.unwrapped.theta_threshold_radians = math.radians(45)
         
-        # Control frame rate
-        clock.tick(FPS)
+        patch_env_to_continuous(env)
+        
+        input_handler = InputHandler()
+        env = SharedControlWrapper(env)
 
-    env.close()
-    pygame.quit()
+        # --- Game and UI Setup ---
+        font = pygame.font.Font(None, 36)
+        TARGET_COLOR = (255, 165, 0) # Orange
+        TEXT_COLOR = (255, 255, 255)
+        score = 0
+        
+        x_threshold = env.unwrapped.x_threshold
+        target_manager = TargetManager(num_targets=1, x_threshold=x_threshold)
+
+        # --- Main Game Loop ---
+        clock = pygame.time.Clock()
+        observation, info = env.reset()
+        
+        while True:
+            if not input_handler.process_frame():
+                break # Exit loop if quit is requested
+
+            agent_action = agent.get_action(observation)
+            human_action = input_handler.get_action()
+
+            # Pass both actions to the wrapper, which will handle blending
+            actions = (agent_action, human_action)
+            observation, reward, terminated, truncated, info = env.step(actions)
+            
+            # --- Target Logic and Rendering ---
+            cart_x = observation[0]
+            targets_hit = target_manager.update(cart_x)
+            if targets_hit > 0:
+                score += targets_hit * 10
+
+            screen = env.unwrapped.screen
+            if screen is not None:
+                # Draw overlays on the screen rendered by the environment
+                world_width = env.unwrapped.x_threshold * 2
+                scale = screen.get_width() / world_width
+                
+                for target_pos in target_manager.get_positions():
+                    target_x_pixels = target_pos * scale + screen.get_width() / 2.0
+                    target_top = screen.get_height() * 0.4
+                    target_bottom = screen.get_height() * 0.8
+                    pygame.draw.line(screen, TARGET_COLOR, (target_x_pixels, target_top), (target_x_pixels, target_bottom), 4)
+
+                score_text = font.render(f"Score: {score}", True, TEXT_COLOR)
+                screen.blit(score_text, (10, 10))
+
+                pygame.display.flip()
+
+            if terminated or truncated:
+                print(f"Pole fell! Final Score: {score}")
+                observation, info = env.reset()
+                score = 0
+                target_manager.reset()
+                
+            clock.tick(FPS)
+
+    finally:
+        # Ensure cleanup happens even if an error occurs or the user quits.
+        if env:
+            env.close()
+        pygame.quit()
 
 if __name__ == "__main__":
     main()
