@@ -6,8 +6,8 @@ This project implements a shared control system for the classic CartPole environ
 
 - **Shared Control System:** The core of the project is a shared control architecture where both the human player and an AI agent can simultaneously influence the cart's movement.
 - **Human-in-the-Loop:** A human player can apply force to the cart using the left and right arrow keys.
-- **AI Agent:** A Proportional-Derivative (PD) controller acts as the AI agent. It prioritizes **balancing the pole** (high priority) while also gently **centering the cart** (low priority) to prevent it from drifting off-screen.
-- **Risk-Aware Arbitration:** The system uses a dynamic `alpha` parameter to blend forces. If the pole is stable, the human is granted more authority (up to 60%). If the pole starts to fall (high risk), the system automatically reduces human authority and increases AI intervention to save the pole.
+- **AI Agent:** A **Proportional-Integral-Derivative (PID)** controller acts as the AI agent. It uses a **deadband strategy**: when the pole is stable, it applies a gentle force to center the cart. When the pole tilts beyond a safe threshold, it switches to aggressive balancing mode.
+- **Risk-Aware Arbitration:** The system uses a dynamic `alpha` parameter to blend forces. If the pole is stable, the human is granted high authority (up to 85%). If the pole starts to fall (high risk), the system automatically reduces human authority and increases AI intervention to save the pole.
 - **Continuous Action Space:** The standard discrete action space of the CartPole-v1 environment has been modified to support continuous force values, allowing for finer control.
 - **Pygame Visualization:** The environment is rendered using Pygame, providing a real-time visual representation of the simulation.
 
@@ -17,11 +17,11 @@ The system integrates `Gymnasium` for the environment and `Pygame` for handling 
 
 1.  **Environment Setup:** The `CartPole-v1` environment is initialized. Its physics are monkey-patched to handle continuous force inputs. The track length and pole angle limits are increased to make the task more manageable for human players.
 2.  **Human Input:** The `InputHandler` class captures keyboard events (`K_LEFT`, `K_RIGHT`) from the human player.
-3.  **AI Agent:** The `BasicAgent` class implements a tuned PD controller. It calculates a `total_force` by summing a strong response to pole angle (to keep it upright) and a weaker response to cart position (to keep it centered).
-4.  **Dynamic Alpha Calculation:** In the main loop, the system calculates a "Risk" metric based on the pole's angle.
+3.  **AI Agent:** The `BasicAgent` class implements a tuned PID controller. It switches behaviors based on stability: "Gentle Centering" (using Integral terms to fix steady-state error) when safe, and "Emergency Balancing" when the pole is at risk.
+4.  **Dynamic Alpha Calculation:** Inside the `SharedControlWrapper`, the system calculates a "Risk" metric based on the pole's angle.
     - **Safe:** Low angle -> High Alpha (Human has control).
     - **Critical:** High angle -> Low Alpha (Agent takes over).
-5.  **Shared Control Wrapper:** The wrapper receives the Agent's force and the calculated `alpha`. It blends them with the Human's input using: `blended_force = (1 - alpha) * agent_action + alpha * human_action`.
+5.  **Action Blending:** The wrapper blends the Agent's force and the Human's input using the calculated alpha: `blended_force = (1 - alpha) * agent_action + alpha * human_action`.
 
 ## How to Run
 
